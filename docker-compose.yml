@@ -1,0 +1,18 @@
+services:
+  analytics-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anibalealvarezs/analytics-engine
+    container_name: analytics-engine-master
+    restart: always
+    ports:
+      - "8050:8050"
+    environment:
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-dev_secret_key}
+    networks:
+      - analytics_network
+
+networks:
+  analytics_network:
+    name: analytics_network_default
