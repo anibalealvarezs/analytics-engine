@@ -80,7 +80,7 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
     }
 
 @app.post("/api/v1/stats/regression", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute") 
+@limiter.limit("500/minute") 
 def calculate_regression(request: Request, payload: RegressionRequest):
     """
     Performs multiple linear regression.
@@ -116,7 +116,7 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     }
 
 @app.post("/api/v1/stats/autocorrelation", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_autocorrelation(request: Request, payload: RegressionRequest, lags: int = 7):
     """
     Calculates the autocorrelation of the dependent variable.
@@ -142,7 +142,7 @@ def calculate_autocorrelation(request: Request, payload: RegressionRequest, lags
     }
 
 @app.post("/api/v1/stats/elasticity", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_elasticity(request: Request, payload: RegressionRequest):
     """
     Log-Log Regression for elasticity (diminishing returns).
@@ -182,7 +182,7 @@ def calculate_elasticity(request: Request, payload: RegressionRequest):
     }
 
 @app.post("/api/v1/stats/macd", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_macd(request: Request, payload: RegressionRequest, short_window: int = 12, long_window: int = 26, signal_window: int = 9):
     """
     Moving Average Convergence Divergence.
@@ -213,7 +213,7 @@ def calculate_macd(request: Request, payload: RegressionRequest, short_window: i
     }
 
 @app.post("/api/v1/stats/anomaly", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_anomaly(request: Request, payload: RegressionRequest, window: int = 7, threshold_z: float = 2.0):
     """
     Rolling Z-Score Anomaly Detection.
@@ -246,7 +246,7 @@ def calculate_anomaly(request: Request, payload: RegressionRequest, window: int 
     }
 
 @app.post("/api/v1/stats/granger", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_granger(request: Request, payload: RegressionRequest, maxlag: int = 3):
     """
     Granger Causality Test.
@@ -288,7 +288,7 @@ def calculate_granger(request: Request, payload: RegressionRequest, maxlag: int 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/stats/trend/linear", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_trend_linear(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
@@ -309,7 +309,7 @@ def calculate_trend_linear(request: Request, payload: TrendRequest):
     }
 
 @app.post("/api/v1/stats/trend/sma", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_trend_sma(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
@@ -325,7 +325,7 @@ def calculate_trend_sma(request: Request, payload: TrendRequest):
     }
 
 @app.post("/api/v1/stats/trend/ema", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_trend_ema(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
@@ -343,7 +343,7 @@ def calculate_trend_ema(request: Request, payload: TrendRequest):
     }
 
 @app.post("/api/v1/stats/trend/holt-winters", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_trend_holt_winters(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
@@ -373,7 +373,7 @@ def calculate_trend_holt_winters(request: Request, payload: TrendRequest):
     }
 
 @app.post("/api/v1/stats/trend/logarithmic", dependencies=[Depends(get_api_key)])
-@limiter.limit("5/minute")
+@limiter.limit("500/minute")
 def calculate_trend_logarithmic(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
