@@ -12,6 +12,8 @@ from sklearn.linear_model import LinearRegression
 import os
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import grangercausalitytests
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from scipy.optimize import curve_fit
 
 app = FastAPI(title="APIs Hub Analytics Engine", version="1.0.0")
 
@@ -43,6 +45,13 @@ class CorrelationRequest(BaseModel):
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
     dependent_var: TimeSeriesData
+
+class TrendRequest(BaseModel):
+    series: TimeSeriesData
+    window: Optional[int] = 7
+    short_window: Optional[int] = 7
+    long_window: Optional[int] = 14
+    seasonal_periods: Optional[int] = 7
 
 @app.get("/health")
 def health_check():
@@ -277,6 +286,119 @@ def calculate_granger(request: Request, payload: RegressionRequest, maxlag: int 
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/stats/trend/linear", dependencies=[Depends(get_api_key)])
+@limiter.limit("5/minute")
+def calculate_trend_linear(request: Request, payload: TrendRequest):
+    df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').dropna()
+    if len(df) < 2:
+        raise HTTPException(status_code=400, detail="Not enough data points")
+    
+    x = np.arange(len(df)).reshape(-1, 1)
+    y = df['y'].values
+    model = LinearRegression().fit(x, y)
+    trend_values = model.predict(x)
+    
+    return {
+        "success": True,
+        "trend": [{"date": str(d.date()), "value": float(v)} for d, v in zip(df['date'], trend_values)],
+        "slope": float(model.coef_[0]),
+        "intercept": float(model.intercept_)
+    }
+
+@app.post("/api/v1/stats/trend/sma", dependencies=[Depends(get_api_key)])
+@limiter.limit("5/minute")
+def calculate_trend_sma(request: Request, payload: TrendRequest):
+    df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').set_index('date')
+    if len(df) < payload.window:
+        raise HTTPException(status_code=400, detail="Not enough data points for window")
+    
+    sma = df['y'].rolling(window=payload.window, min_periods=1).mean()
+    
+    return {
+        "success": True,
+        "trend": [{"date": str(d.date()), "value": float(v)} for d, v in zip(sma.index, sma.values)]
+    }
+
+@app.post("/api/v1/stats/trend/ema", dependencies=[Depends(get_api_key)])
+@limiter.limit("5/minute")
+def calculate_trend_ema(request: Request, payload: TrendRequest):
+    df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').set_index('date')
+    if len(df) < 2:
+        raise HTTPException(status_code=400, detail="Not enough data points")
+    
+    ema_short = df['y'].ewm(span=payload.short_window, adjust=False).mean()
+    ema_long = df['y'].ewm(span=payload.long_window, adjust=False).mean()
+    
+    return {
+        "success": True,
+        "trend_short": [{"date": str(d.date()), "value": float(v)} for d, v in zip(ema_short.index, ema_short.values)],
+        "trend_long": [{"date": str(d.date()), "value": float(v)} for d, v in zip(ema_long.index, ema_long.values)]
+    }
+
+@app.post("/api/v1/stats/trend/holt-winters", dependencies=[Depends(get_api_key)])
+@limiter.limit("5/minute")
+def calculate_trend_holt_winters(request: Request, payload: TrendRequest):
+    df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').set_index('date')
+    
+    if len(df) < payload.seasonal_periods * 2:
+        # Fallback to simple EMA if not enough data
+        trend = df['y'].ewm(span=payload.seasonal_periods, adjust=False).mean()
+        return {
+            "success": True,
+            "trend": [{"date": str(d.date()), "value": float(v)} for d, v in zip(trend.index, trend.values)],
+            "note": "Fell back to EMA due to insufficient data for seasonality"
+        }
+    
+    # We want the trend component (level + trend), removing the seasonal component
+    model = ExponentialSmoothing(df['y'], trend='add', seasonal='add', seasonal_periods=payload.seasonal_periods, initialization_method="estimated")
+    fit_model = model.fit()
+    
+    # Reconstruct the signal without the seasonal component (just level + trend)
+    level = fit_model.level
+    trend_component = fit_model.trend if fit_model.trend is not None else 0
+    smooth_signal = level + trend_component
+    
+    return {
+        "success": True,
+        "trend": [{"date": str(d.date()), "value": float(v)} for d, v in zip(smooth_signal.index, smooth_signal.values)]
+    }
+
+@app.post("/api/v1/stats/trend/logarithmic", dependencies=[Depends(get_api_key)])
+@limiter.limit("5/minute")
+def calculate_trend_logarithmic(request: Request, payload: TrendRequest):
+    df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').dropna()
+    if len(df) < 3:
+        raise HTTPException(status_code=400, detail="Not enough data points")
+    
+    x = np.arange(1, len(df) + 1)
+    y = df['y'].values
+    
+    def log_func(x, a, b):
+        return a * np.log(x) + b
+        
+    try:
+        popt, _ = curve_fit(log_func, x, y)
+        trend_values = log_func(x, *popt)
+    except:
+        # Fallback to linear if optimization fails
+        model = LinearRegression().fit(x.reshape(-1, 1), y)
+        trend_values = model.predict(x.reshape(-1, 1))
+        
+    return {
+        "success": True,
+        "trend": [{"date": str(d.date()), "value": float(v)} for d, v in zip(df['date'], trend_values)]
+    }
 
 if __name__ == "__main__":
     import uvicorn
