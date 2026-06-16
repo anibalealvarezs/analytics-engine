@@ -36,7 +36,7 @@ def get_api_key(api_key_header: str = Security(api_key_header)):
 
 class TimeSeriesData(BaseModel):
     dates: List[str]
-    values: List[float]
+    values: List[Optional[float]]
 
 class CorrelationRequest(BaseModel):
     series_x: TimeSeriesData
@@ -48,6 +48,7 @@ class RegressionRequest(BaseModel):
 
 class TrendRequest(BaseModel):
     series: TimeSeriesData
+    metric: Optional[str] = None
     window: Optional[int] = 7
     short_window: Optional[int] = 7
     long_window: Optional[int] = 14
@@ -287,12 +288,24 @@ def calculate_granger(request: Request, payload: RegressionRequest, maxlag: int 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def fill_gaps(df: pd.DataFrame, metric: Optional[str]) -> pd.DataFrame:
+    if metric in ['cost_per_result', 'purchase_roas', 'cpm', 'cpc', 'ctr']:
+        # Efficiency/ratio metrics: interpolate or forward-fill
+        df['y'] = df['y'].interpolate(method='linear', limit_direction='both')
+        df['y'] = df['y'].ffill().bfill()
+    else:
+        # Absolute volume metrics: zero-fill
+        df['y'] = df['y'].fillna(0)
+    return df
+
 @app.post("/api/v1/stats/trend/linear", dependencies=[Depends(get_api_key)])
 @limiter.limit("500/minute")
 def calculate_trend_linear(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date').dropna()
+    df = df.sort_values('date').set_index('date')
+    df = fill_gaps(df, payload.metric)
+    df = df.reset_index()
     if len(df) < 2:
         raise HTTPException(status_code=400, detail="Not enough data points")
     
@@ -314,6 +327,8 @@ def calculate_trend_sma(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date').set_index('date')
+    df = fill_gaps(df, payload.metric)
+    
     if len(df) < payload.window:
         raise HTTPException(status_code=400, detail="Not enough data points for window")
     
@@ -330,6 +345,8 @@ def calculate_trend_ema(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date').set_index('date')
+    df = fill_gaps(df, payload.metric)
+    
     if len(df) < 2:
         raise HTTPException(status_code=400, detail="Not enough data points")
     
@@ -348,6 +365,7 @@ def calculate_trend_holt_winters(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date').set_index('date')
+    df = fill_gaps(df, payload.metric)
     
     if len(df) < payload.seasonal_periods * 2:
         # Fallback to simple EMA if not enough data
@@ -377,7 +395,9 @@ def calculate_trend_holt_winters(request: Request, payload: TrendRequest):
 def calculate_trend_logarithmic(request: Request, payload: TrendRequest):
     df = pd.DataFrame({"date": payload.series.dates, "y": payload.series.values})
     df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date').dropna()
+    df = df.sort_values('date').set_index('date')
+    df = fill_gaps(df, payload.metric)
+    df = df.reset_index()
     if len(df) < 3:
         raise HTTPException(status_code=400, detail="Not enough data points")
     
