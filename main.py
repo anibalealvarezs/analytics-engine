@@ -242,7 +242,11 @@ def calculate_anomaly(request: Request, payload: RegressionRequest, window: int 
             "anomaly_detected": len(anomaly_dates) > 0,
             "anomaly_dates": anomaly_dates,
             "threshold_z": threshold_z,
-            "data_points": len(df)
+            "data_points": len(df),
+            "series": {
+                "dates": [str(d.date()) for d in df.index],
+                "values": [float(v) for v in df['y'].values]
+            }
         }
     }
 
