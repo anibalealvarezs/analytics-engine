@@ -113,7 +113,12 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         "baseline_intercept": float(model.intercept_),
         "coefficients": coefficients,
         "r_squared": float(model.score(X, y)),
-        "data_points": len(df)
+        "data_points": len(df),
+        "scatter_data": {
+            "x": [float(val) for val in X.iloc[:, 0].tolist()],
+            "y": [float(val) for val in y.tolist()],
+            "x_label": ind_vars[0]
+        } if len(ind_vars) == 1 else None
     }
 
 @app.post("/api/v1/stats/autocorrelation", dependencies=[Depends(get_api_key)])
@@ -209,7 +214,13 @@ def calculate_macd(request: Request, payload: RegressionRequest, short_window: i
             "signal": float(signal_line.iloc[-1]),
             "histogram": float(histogram.iloc[-1]),
             "momentum": "accelerating" if histogram.iloc[-1] > 0 else "decelerating",
-            "last_date": str(df.index[-1].date())
+            "last_date": str(df.index[-1].date()),
+            "series": {
+                "dates": df.index.strftime('%Y-%m-%d').tolist(),
+                "macd_line": [float(x) if not pd.isna(x) else None for x in macd_line.tolist()],
+                "signal_line": [float(x) if not pd.isna(x) else None for x in signal_line.tolist()],
+                "histogram": [float(x) if not pd.isna(x) else None for x in histogram.tolist()]
+            }
         }
     }
 
