@@ -176,14 +176,23 @@ def calculate_elasticity(request: Request, payload: RegressionRequest):
     
     X = sm.add_constant(log_X)
     model = sm.OLS(log_y, X).fit()
+    x_col = ind_vars[0] if len(ind_vars) > 0 else "x"
     
     return {
         "success": True,
         "data": {
             "elasticity_coefficients": model.params.drop('const').to_dict(),
+            "coefficients": model.params.drop('const').to_dict(),
             "baseline_log_intercept": float(model.params.get('const', 0)),
+            "baseline_intercept": float(model.params.get('const', 0)),
             "r_squared": float(model.rsquared),
-            "data_points": len(df)
+            "data_points": len(df),
+            "model_type": "log-log",
+            "scatter_data": {
+                "x_label": x_col,
+                "x": [float(val) for val in df[x_col].values],
+                "y": [float(val) for val in df['y'].values]
+            }
         }
     }
 
