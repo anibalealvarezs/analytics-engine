@@ -42,9 +42,14 @@ class CorrelationRequest(BaseModel):
     series_x: TimeSeriesData
     series_y: TimeSeriesData
 
+class EdgeCaseHandling(BaseModel):
+    weighted: bool = True
+    grouping: str = "none"  # "none", "histogram", "percentile"
+
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
     dependent_var: TimeSeriesData
+    edge_case_handling: Optional[EdgeCaseHandling] = None
 
 class TrendRequest(BaseModel):
     series: TimeSeriesData
@@ -80,11 +85,63 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
         "data_points": len(df)
     }
 
+def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others") -> pd.DataFrame:
+    """
+    Group low-frequency dimension values (queries, pages, etc.) into a single
+    centroid point using histogram elbow detection on the independent variable.
+
+    Builds a log-scale histogram of x-values, finds the first bin whose frequency
+    drops below the mean frequency (the 'elbow'), and collapses everything below
+    that threshold into one point with the mean x and mean y of the tail.
+    """
+    values = df[x_col].values
+    if len(values) < 5:
+        return df
+
+    # Log-scale bins to handle long-tail distributions
+    log_vals = np.log10(np.clip(values, 1e-10, None))
+    n_bins = max(5, min(50, int(np.sqrt(len(df)))))
+    counts, bin_edges = np.histogram(log_vals, bins=n_bins)
+
+    # Find the first bin whose count is below the mean count (elbow)
+    mean_count = np.mean(counts)
+    elbow_idx = None
+    for i in range(len(counts)):
+        if counts[i] < mean_count:
+            elbow_idx = i
+            break
+
+    if elbow_idx is None or elbow_idx == 0:
+        return df  # No elbow found or all bins are high-frequency
+
+    # Recover the original-scale threshold at the right edge of the elbow bin
+    threshold = 10 ** bin_edges[elbow_idx + 1]
+
+    # Split
+    low_mask = df[x_col] < threshold
+    if low_mask.sum() < 2:
+        return df  # Too few points to group
+
+    high_df = df[~low_mask].copy()
+    low_df = df[low_mask]
+
+    # Create centroid point
+    centroid = pd.DataFrame([{
+        "date": label,
+        "y": low_df["y"].mean(),
+        x_col: low_df[x_col].mean(),
+    }])
+
+    result = pd.concat([centroid, high_df], ignore_index=True)
+    result = result.sort_values(x_col).reset_index(drop=True)
+    return result
+
+
 @app.post("/api/v1/stats/regression", dependencies=[Depends(get_api_key)])
 @limiter.limit("500/minute") 
 def calculate_regression(request: Request, payload: RegressionRequest):
     """
-    Performs multiple linear regression.
+    Performs multiple linear regression with optional WLS and histogram-elbow grouping.
     """
     dfs = []
     df_y = pd.DataFrame({"date": payload.dependent_var.dates, "y": payload.dependent_var.values})
@@ -101,18 +158,38 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
         
     ind_vars = list(payload.independent_vars.keys())
+    ech = payload.edge_case_handling
+
+    # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
+    if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
+        x_col = ind_vars[0]
+        df = _histogram_elbow_grouping(df, x_col)
+        if len(df) < 2:
+            raise HTTPException(status_code=400, detail="Not enough data points after histogram grouping.")
+
     X = df[ind_vars]
     y = df["y"]
-    
-    model = LinearRegression()
-    model.fit(X, y)
-    
-    coefficients = {var: float(coef) for var, coef in zip(ind_vars, model.coef_)}
+
+    # --- Step 2: Weighted Least Squares (statistical robustness) ---
+    if ech and ech.weighted and len(ind_vars) == 1:
+        x_col = ind_vars[0]
+        weights = np.clip(df[x_col].values, 1e-10, None)
+        X_with_const = sm.add_constant(X)
+        model = sm.WLS(y, X_with_const, weights=weights).fit()
+        coefficients = {var: float(model.params[var]) for var in ind_vars}
+        r_squared = float(model.rsquared)
+        baseline_intercept = float(model.params["const"])
+    else:
+        model = LinearRegression()
+        model.fit(X, y)
+        coefficients = {var: float(coef) for var, coef in zip(ind_vars, model.coef_)}
+        r_squared = float(model.score(X, y))
+        baseline_intercept = float(model.intercept_)
     
     return {
-        "baseline_intercept": float(model.intercept_),
+        "baseline_intercept": baseline_intercept,
         "coefficients": coefficients,
-        "r_squared": float(model.score(X, y)),
+        "r_squared": r_squared,
         "data_points": len(df),
         "scatter_data": {
             "x": [float(val) for val in X.iloc[:, 0].tolist()],
