@@ -89,14 +89,12 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
         "data_points": len(df)
     }
 
-def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others") -> pd.DataFrame:
+def _histogram_elbow_filter(df: pd.DataFrame, x_col: str) -> pd.DataFrame:
     if x_col not in df.columns:
         return df
 
-    # Log before filtering zeros
     logger.info(f"histogram_elbow_incoming: x_col={x_col}, n_before_filter={len(df)}, n_zero={(df[x_col] <= 0).sum()}, min_x={float(df[x_col].min()):.4f}, max_x={float(df[x_col].max()):.4f}")
 
-    # Exclude zero/negative x values — they are noise, not a low-volume tail
     df = df[df[x_col] > 0].copy()
     if len(df) < 5:
         logger.info(f"histogram_elbow: {len(df)} rows with positive x, need 5, skipping")
@@ -119,36 +117,24 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
         return df
 
     threshold = 10 ** bin_edges[elbow_idx + 1]
-
     mask = df[x_col] < threshold
 
     if mask.sum() < 2:
         logger.info(f"histogram_elbow: threshold={threshold:.4f}, tail_size={mask.sum()}, too small, skipping")
         return df
 
-    tail = df[mask]
     head = df[~mask].copy()
+    logger.info(f"histogram_elbow: x_col={x_col}, threshold={threshold:.4f}, tail_size={mask.sum()}, head_size={len(head)}, tail_labels={df[mask]['date'].tolist()}")
 
-    centroid_y = tail["y"].mean()
-    centroid_x = tail[x_col].mean()
-    logger.info(f"histogram_elbow: x_col={x_col}, threshold={threshold:.4f}, tail_size={mask.sum()}, head_size={len(head)}, centroid=(x={centroid_x:.4f}, y={centroid_y:.6f}), tail_labels={tail['date'].tolist()}")
-
-    centroid = pd.DataFrame([{
-        "date": label,
-        "y": centroid_y,
-        x_col: centroid_x,
-    }])
-
-    result = pd.concat([centroid, head], ignore_index=True)
-    result = result.sort_values(x_col).reset_index(drop=True)
-    return result
+    return head
 
 
 @app.post("/api/v1/stats/regression", dependencies=[Depends(get_api_key)])
 @limiter.limit("500/minute") 
 def calculate_regression(request: Request, payload: RegressionRequest):
     """
-    Performs multiple linear regression with optional WLS and histogram-elbow grouping.
+    Performs multiple linear regression with optional WLS.
+    Histogram-elbow filter applied to scatter display only (does not affect regression).
     """
     dfs = []
     df_y = pd.DataFrame({"date": payload.dependent_var.dates, "y": payload.dependent_var.values})
@@ -184,48 +170,52 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     else:
         logger.info(f"analytics_engine_incoming: n={len(df)}, vars={ind_vars}")
 
-    # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
-    # Groups the low-x tail (noisy, low-volume items) into a single
-    # synthetic [[[others]]] point so the scatter plot stays readable.
-    if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
-        x_col = ind_vars[0]
-        df = _histogram_elbow_grouping(df, x_col)
-        if len(df) < 2:
-            raise HTTPException(status_code=400, detail="Not enough data points after histogram grouping.")
+    # --- Step 1: Regression (uses ALL original points) ---
+    df_regression = df.copy()
 
-    unknown_rows_after = df[df["date"] == "unknown"]
-    if len(unknown_rows_after) > 0:
-        x_cols = [c for c in df.columns if c != "date"]
-        logger.info(f"merge_unknown_after_histogram: n_unknown_rows={len(unknown_rows_after)}, x_values={unknown_rows_after[x_cols[0]].tolist() if x_cols else 'none'}")
-    else:
-        logger.info("merge_unknown_after_histogram: no unknown rows")
+    X_all = df_regression[ind_vars]
+    y_all = df_regression["y"]
 
-    X = df[ind_vars]
-    y = df["y"]
-
-    # --- Step 2: Weighted Least Squares (statistical robustness) ---
     if ech and ech.weighted and len(ind_vars) == 1:
         x_col = ind_vars[0]
-        weights = np.clip(df[x_col].values, 1e-10, None)
-        X_with_const = sm.add_constant(X)
-        model = sm.WLS(y, X_with_const, weights=weights).fit()
+        weights = np.clip(df_regression[x_col].values, 1e-10, None)
+        X_with_const = sm.add_constant(X_all)
+        model = sm.WLS(y_all, X_with_const, weights=weights).fit()
         coefficients = {var: float(model.params[var]) for var in ind_vars}
         r_squared = float(model.rsquared)
         baseline_intercept = float(model.params["const"])
     else:
         model = LinearRegression()
-        model.fit(X, y)
+        model.fit(X_all, y_all)
         coefficients = {var: float(coef) for var, coef in zip(ind_vars, model.coef_)}
-        r_squared = float(model.score(X, y))
+        r_squared = float(model.score(X_all, y_all))
         baseline_intercept = float(model.intercept_)
-    
+
+    # --- Step 2: Histogram-elbow filter (chart readability only) ---
+    df_display = df.copy()
+    if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
+        x_col = ind_vars[0]
+        filtered = _histogram_elbow_filter(df_display, x_col)
+        if len(filtered) >= 2:
+            df_display = filtered
+
+    unknown_rows_after = df_display[df_display["date"] == "unknown"]
+    if len(unknown_rows_after) > 0:
+        x_cols = [c for c in df_display.columns if c != "date"]
+        logger.info(f"merge_unknown_after_histogram: n_unknown_rows={len(unknown_rows_after)}, x_values={unknown_rows_after[x_cols[0]].tolist() if x_cols else 'none'}")
+    else:
+        logger.info("merge_unknown_after_histogram: no unknown rows")
+
     scatter = None
     if len(ind_vars) == 1:
+        x_col = ind_vars[0]
+        X_display = df_display[x_col]
+        y_display = df_display["y"]
         scatter = {
-            "x": [float(val) for val in X.iloc[:, 0].tolist()],
-            "y": [float(val) for val in y.tolist()],
+            "x": [float(val) for val in X_display.tolist()],
+            "y": [float(val) for val in y_display.tolist()],
             "x_label": ind_vars[0],
-            "labels": [str(d) for d in df["date"].tolist()]
+            "labels": [str(d) for d in df_display["date"].tolist()]
         }
         if scatter["x"]:
             max_idx = int(np.argmax(scatter["x"]))
@@ -235,7 +225,7 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         "baseline_intercept": baseline_intercept,
         "coefficients": coefficients,
         "r_squared": r_squared,
-        "data_points": len(df),
+        "data_points": len(df_regression),
         "scatter_data": scatter,
     }
 
