@@ -100,15 +100,16 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
     group_col : str, optional
         The column to build the histogram on. If None, defaults to x_col.
         Use 'y' to group by the dependent variable (KPI output). When 'y'
-        is specified, the underlying frequency metric (y * x) is derived
-        and used for histogram binning, so that the elbow identifies
-        low-volume dimension values rather than low-ratio values.
+        is specified, the performance ratio (y / x) is derived and used
+        for histogram binning, so that the elbow identifies poorly-
+        performing dimension values (high x, low y) rather than
+        low-volume ones.
     """
     col = group_col if group_col else x_col
 
     if group_col == 'y' and 'y' in df.columns and x_col in df.columns:
         df = df.copy()
-        df['_freq'] = df['y'] * df[x_col]
+        df['_freq'] = df['y'] / df[x_col].replace(0, np.nan).fillna(1e-10)
         col = '_freq'
 
     def _drop_freq(df_) -> pd.DataFrame:
