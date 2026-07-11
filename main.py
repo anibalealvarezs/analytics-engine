@@ -45,6 +45,7 @@ class CorrelationRequest(BaseModel):
 class EdgeCaseHandling(BaseModel):
     weighted: bool = True
     grouping: str = "none"  # "none", "histogram", "percentile"
+    group_column: Optional[str] = None  # "x" (default), "y", or None
 
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
@@ -85,25 +86,32 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
         "data_points": len(df)
     }
 
-def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others") -> pd.DataFrame:
+def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others", group_col: Optional[str] = None) -> pd.DataFrame:
     """
     Group low-frequency dimension values (queries, pages, etc.) into a single
-    centroid point using histogram elbow detection on the independent variable.
+    centroid point using histogram elbow detection.
 
-    Builds a log-scale histogram of x-values, finds the first bin whose frequency
-    drops below the mean frequency (the 'elbow'), and collapses everything below
-    that threshold into one point with the mean x and mean y of the tail.
+    Builds a log-scale histogram of group_col values, finds the first bin whose
+    frequency drops below the mean frequency (the 'elbow'), and collapses everything
+    below that threshold into one point with the mean x and mean y of the tail.
+
+    Parameters
+    ----------
+    group_col : str, optional
+        The column to build the histogram on. If None, defaults to x_col.
+        Use 'y' to group by the dependent variable (KPI output), which is
+        appropriate when x is a rank metric like position (where low x
+        means best performance, not least important).
     """
-    values = df[x_col].values
+    col = group_col if group_col else x_col
+    values = df[col].values
     if len(values) < 5:
         return df
 
-    # Log-scale bins to handle long-tail distributions
     log_vals = np.log10(np.clip(values, 1e-10, None))
     n_bins = max(5, min(50, int(np.sqrt(len(df)))))
     counts, bin_edges = np.histogram(log_vals, bins=n_bins)
 
-    # Find the first bin whose count is below the mean count (elbow)
     mean_count = np.mean(counts)
     elbow_idx = None
     for i in range(len(counts)):
@@ -112,20 +120,17 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
             break
 
     if elbow_idx is None or elbow_idx == 0:
-        return df  # No elbow found or all bins are high-frequency
+        return df
 
-    # Recover the original-scale threshold at the right edge of the elbow bin
     threshold = 10 ** bin_edges[elbow_idx + 1]
 
-    # Split
-    low_mask = df[x_col] < threshold
+    low_mask = df[col] < threshold
     if low_mask.sum() < 2:
-        return df  # Too few points to group
+        return df
 
     high_df = df[~low_mask].copy()
     low_df = df[low_mask]
 
-    # Create centroid point
     centroid = pd.DataFrame([{
         "date": label,
         "y": low_df["y"].mean(),
@@ -161,9 +166,13 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
+    # The group_column tells which dimension to histogram on:
+    #   "y"      -> group by KPI output (e.g. CTR), correct for rank-based x like position
+    #   "x"/None -> group by independent variable (default)
     if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
         x_col = ind_vars[0]
-        df = _histogram_elbow_grouping(df, x_col)
+        group_col = ech.group_column if ech.group_column and ech.group_column != "x" else None
+        df = _histogram_elbow_grouping(df, x_col, group_col=group_col)
         if len(df) < 2:
             raise HTTPException(status_code=400, detail="Not enough data points after histogram grouping.")
 
