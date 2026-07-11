@@ -87,39 +87,13 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
     }
 
 def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others", group_col: Optional[str] = None) -> pd.DataFrame:
-    """
-    Group low-frequency dimension values (queries, pages, etc.) into a single
-    centroid point using histogram elbow detection.
-
-    Builds a log-scale histogram of group_col values, finds the first bin whose
-    frequency drops below the mean frequency (the 'elbow'), and collapses everything
-    below that threshold into one point with the mean x and mean y of the tail.
-
-    Parameters
-    ----------
-    group_col : str, optional
-        The column to build the histogram on. If None, defaults to x_col.
-        Use 'y' to group by the dependent variable (KPI output). When 'y'
-        is specified, the performance ratio (y / x) is derived and used
-        for histogram binning, so that the elbow identifies poorly-
-        performing dimension values (high x, low y) rather than
-        low-volume ones.
-    """
     col = group_col if group_col else x_col
-
-    if group_col == 'y' and 'y' in df.columns and x_col in df.columns:
-        df = df.copy()
-        df['_freq'] = df['y'] / df[x_col].replace(0, np.nan).fillna(1e-10)
-        col = '_freq'
-
-    def _drop_freq(df_) -> pd.DataFrame:
-        if '_freq' in df_.columns:
-            return df_.drop(columns=['_freq'])
-        return df_
+    if col not in df.columns:
+        return df
 
     values = df[col].values
     if len(values) < 5:
-        return _drop_freq(df)
+        return df
 
     log_vals = np.log10(np.clip(values, 1e-10, None))
     n_bins = max(5, min(50, int(np.sqrt(len(df)))))
@@ -133,26 +107,26 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
             break
 
     if elbow_idx is None or elbow_idx == 0:
-        return _drop_freq(df)
+        return df
 
     threshold = 10 ** bin_edges[elbow_idx + 1]
 
-    low_mask = df[col] < threshold
-    if low_mask.sum() < 2:
-        return _drop_freq(df)
+    mask = df[col] < threshold
+    if mask.sum() < 2:
+        return df
 
-    high_df = df[~low_mask].copy()
-    low_df = df[low_mask]
+    tail = df[mask]
+    head = df[~mask].copy()
 
     centroid = pd.DataFrame([{
         "date": label,
-        "y": low_df["y"].mean(),
-        x_col: low_df[x_col].mean(),
+        "y": tail["y"].mean(),
+        x_col: tail[x_col].mean(),
     }])
 
-    result = pd.concat([centroid, high_df], ignore_index=True)
+    result = pd.concat([centroid, head], ignore_index=True)
     result = result.sort_values(x_col).reset_index(drop=True)
-    return _drop_freq(result)
+    return result
 
 
 @app.post("/api/v1/stats/regression", dependencies=[Depends(get_api_key)])
@@ -179,9 +153,9 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
-    # The group_column tells which dimension to histogram on:
-    #   "y"      -> group by KPI output (e.g. CTR), correct for rank-based x like position
-    #   "x"/None -> group by independent variable (default)
+    # group_column determines which column to histogram on:
+    #   "y"      -> histogram on KPI output (y), group low-y tail (underperformers)
+    #   "x"/None -> histogram on independent var (x), group low-x tail (low-volume noise)
     if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
         x_col = ind_vars[0]
         group_col = ech.group_column if ech.group_column and ech.group_column != "x" else None
