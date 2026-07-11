@@ -93,6 +93,9 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
     if x_col not in df.columns:
         return df
 
+    # Log before filtering zeros
+    logger.info(f"histogram_elbow_incoming: x_col={x_col}, n_before_filter={len(df)}, n_zero={(df[x_col] <= 0).sum()}, min_x={float(df[x_col].min()):.4f}, max_x={float(df[x_col].max()):.4f}")
+
     # Exclude zero/negative x values — they are noise, not a low-volume tail
     df = df[df[x_col] > 0].copy()
     if len(df) < 5:
@@ -162,6 +165,16 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
         
     ind_vars = list(payload.independent_vars.keys())
+
+    # Log incoming data before any processing
+    if len(ind_vars) == 1:
+        x_col = ind_vars[0]
+        x_vals = df[x_col].values
+        labels = df["date"].tolist()
+        max_idx = int(np.argmax(x_vals))
+        logger.info(f"analytics_engine_incoming: n={len(df)}, min_x={float(np.min(x_vals)):.4f}, max_x={float(np.max(x_vals)):.4f}, max_x_label={labels[max_idx]}, grouping={ech.grouping if ech else 'none'}, weighted={ech.weighted if ech else 'none'}")
+    else:
+        logger.info(f"analytics_engine_incoming: n={len(df)}, vars={ind_vars}")
     ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
@@ -192,17 +205,24 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         r_squared = float(model.score(X, y))
         baseline_intercept = float(model.intercept_)
     
+    scatter = None
+    if len(ind_vars) == 1:
+        scatter = {
+            "x": [float(val) for val in X.iloc[:, 0].tolist()],
+            "y": [float(val) for val in y.tolist()],
+            "x_label": ind_vars[0],
+            "labels": [str(d) for d in df["date"].tolist()]
+        }
+        if scatter["x"]:
+            max_idx = int(np.argmax(scatter["x"]))
+            logger.info(f"analytics_engine_outgoing: n={len(scatter['x'])}, min_x={min(scatter['x']):.4f}, max_x={max(scatter['x']):.4f}, max_x_label={scatter['labels'][max_idx]}")
+
     return {
         "baseline_intercept": baseline_intercept,
         "coefficients": coefficients,
         "r_squared": r_squared,
         "data_points": len(df),
-        "scatter_data": {
-            "x": [float(val) for val in X.iloc[:, 0].tolist()],
-            "y": [float(val) for val in y.tolist()],
-            "x_label": ind_vars[0],
-            "labels": [str(d) for d in df["date"].tolist()]
-        } if len(ind_vars) == 1 else None
+        "scatter_data": scatter,
     }
 
 @app.post("/api/v1/stats/autocorrelation", dependencies=[Depends(get_api_key)])
