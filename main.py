@@ -93,11 +93,14 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
     if x_col not in df.columns:
         return df
 
-    values = df[x_col].values
-    if len(values) < 5:
+    # Exclude zero/negative x values — they are noise, not a low-volume tail
+    df = df[df[x_col] > 0].copy()
+    if len(df) < 5:
+        logger.info(f"histogram_elbow: {len(df)} rows with positive x, need 5, skipping")
         return df
 
-    log_vals = np.log10(np.clip(values, 1e-10, None))
+    values = df[x_col].values
+    log_vals = np.log10(values)
     n_bins = max(5, min(50, int(np.sqrt(len(df)))))
     counts, bin_edges = np.histogram(log_vals, bins=n_bins)
 
@@ -109,9 +112,16 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
             break
 
     if elbow_idx is None or elbow_idx == 0:
+        logger.info(f"histogram_elbow: elbow_idx={elbow_idx}, no grouping needed")
         return df
 
-    threshold = 10 ** bin_edges[elbow_idx + 1]
+    # Use the actual x value at the elbow position as threshold,
+    # not a log-bin-derived value, to avoid near-zero thresholds from empty bins
+    cumsum = np.cumsum(counts)
+    tail_proportion = cumsum[elbow_idx - 1] / cumsum[-1]
+    sorted_vals = np.sort(values)
+    idx = min(int(tail_proportion * len(sorted_vals)), len(sorted_vals) - 1)
+    threshold = sorted_vals[idx]
 
     mask = df[x_col] < threshold
 
