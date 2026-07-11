@@ -115,13 +115,7 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
         logger.info(f"histogram_elbow: elbow_idx={elbow_idx}, no grouping needed")
         return df
 
-    # Use the actual x value at the elbow position as threshold,
-    # not a log-bin-derived value, to avoid near-zero thresholds from empty bins
-    cumsum = np.cumsum(counts)
-    tail_proportion = cumsum[elbow_idx - 1] / cumsum[-1]
-    sorted_vals = np.sort(values)
-    idx = min(int(tail_proportion * len(sorted_vals)), len(sorted_vals) - 1)
-    threshold = sorted_vals[idx]
+    threshold = 10 ** bin_edges[elbow_idx + 1]
 
     mask = df[x_col] < threshold
 
