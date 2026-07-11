@@ -194,7 +194,8 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         "scatter_data": {
             "x": [float(val) for val in X.iloc[:, 0].tolist()],
             "y": [float(val) for val in y.tolist()],
-            "x_label": ind_vars[0]
+            "x_label": ind_vars[0],
+            "labels": [str(d) for d in df["date"].tolist()]
         } if len(ind_vars) == 1 else None
     }
 
@@ -268,7 +269,8 @@ def calculate_elasticity(request: Request, payload: RegressionRequest):
             "scatter_data": {
                 "x_label": x_col,
                 "x": [float(val) for val in df[x_col].values],
-                "y": [float(val) for val in df['y'].values]
+                "y": [float(val) for val in df['y'].values],
+                "labels": [str(d) for d in df["date"].tolist()]
             }
         }
     }
