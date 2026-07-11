@@ -5,8 +5,12 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import logging
 import numpy as np
 import pandas as pd
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 import os
@@ -112,15 +116,20 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
     mask = df[x_col] < threshold
 
     if mask.sum() < 2:
+        logger.info(f"histogram_elbow: threshold={threshold:.4f}, tail_size={mask.sum()}, too small, skipping")
         return df
 
     tail = df[mask]
     head = df[~mask].copy()
 
+    centroid_y = tail["y"].mean()
+    centroid_x = tail[x_col].mean()
+    logger.info(f"histogram_elbow: x_col={x_col}, threshold={threshold:.4f}, tail_size={mask.sum()}, head_size={len(head)}, centroid=(x={centroid_x:.4f}, y={centroid_y:.6f}), tail_labels={tail['date'].tolist()}")
+
     centroid = pd.DataFrame([{
         "date": label,
-        "y": tail["y"].mean(),
-        x_col: tail[x_col].mean(),
+        "y": centroid_y,
+        x_col: centroid_x,
     }])
 
     result = pd.concat([centroid, head], ignore_index=True)
