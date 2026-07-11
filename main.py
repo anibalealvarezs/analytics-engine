@@ -99,14 +99,26 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
     ----------
     group_col : str, optional
         The column to build the histogram on. If None, defaults to x_col.
-        Use 'y' to group by the dependent variable (KPI output), which is
-        appropriate when x is a rank metric like position (where low x
-        means best performance, not least important).
+        Use 'y' to group by the dependent variable (KPI output). When 'y'
+        is specified, the underlying frequency metric (y * x) is derived
+        and used for histogram binning, so that the elbow identifies
+        low-volume dimension values rather than low-ratio values.
     """
     col = group_col if group_col else x_col
+
+    if group_col == 'y' and 'y' in df.columns and x_col in df.columns:
+        df = df.copy()
+        df['_freq'] = df['y'] * df[x_col]
+        col = '_freq'
+
+    def _drop_freq(df_) -> pd.DataFrame:
+        if '_freq' in df_.columns:
+            return df_.drop(columns=['_freq'])
+        return df_
+
     values = df[col].values
     if len(values) < 5:
-        return df
+        return _drop_freq(df)
 
     log_vals = np.log10(np.clip(values, 1e-10, None))
     n_bins = max(5, min(50, int(np.sqrt(len(df)))))
@@ -120,13 +132,13 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
             break
 
     if elbow_idx is None or elbow_idx == 0:
-        return df
+        return _drop_freq(df)
 
     threshold = 10 ** bin_edges[elbow_idx + 1]
 
     low_mask = df[col] < threshold
     if low_mask.sum() < 2:
-        return df
+        return _drop_freq(df)
 
     high_df = df[~low_mask].copy()
     low_df = df[low_mask]
@@ -139,7 +151,7 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
 
     result = pd.concat([centroid, high_df], ignore_index=True)
     result = result.sort_values(x_col).reset_index(drop=True)
-    return result
+    return _drop_freq(result)
 
 
 @app.post("/api/v1/stats/regression", dependencies=[Depends(get_api_key)])
