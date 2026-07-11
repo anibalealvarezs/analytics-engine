@@ -45,7 +45,6 @@ class CorrelationRequest(BaseModel):
 class EdgeCaseHandling(BaseModel):
     weighted: bool = True
     grouping: str = "none"  # "none", "histogram", "percentile"
-    group_column: Optional[str] = None  # "x" (default), "y", or None
 
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
@@ -86,7 +85,7 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
         "data_points": len(df)
     }
 
-def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others", group_col: Optional[str] = None) -> pd.DataFrame:
+def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others") -> pd.DataFrame:
     if x_col not in df.columns:
         return df
 
@@ -110,10 +109,7 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
 
     threshold = 10 ** bin_edges[elbow_idx + 1]
 
-    if group_col == 'y':
-        mask = df[x_col] > threshold
-    else:
-        mask = df[x_col] < threshold
+    mask = df[x_col] < threshold
 
     if mask.sum() < 2:
         return df
@@ -156,13 +152,11 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
-    # Always histograms on x_col. When group_col='y' (x is a reverse metric,
-    # e.g. position where lower = better), inverts to group the SPARSE
-    # high-x tail (poor performers) instead of the DENSE low-x tail.
+    # Groups the low-x tail (noisy, low-volume items) into a single
+    # synthetic [[[others]]] point so the scatter plot stays readable.
     if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
         x_col = ind_vars[0]
-        group_col = ech.group_column if ech.group_column and ech.group_column != "x" else None
-        df = _histogram_elbow_grouping(df, x_col, group_col=group_col)
+        df = _histogram_elbow_grouping(df, x_col)
         if len(df) < 2:
             raise HTTPException(status_code=400, detail="Not enough data points after histogram grouping.")
 
