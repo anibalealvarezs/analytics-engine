@@ -87,11 +87,10 @@ def calculate_correlation(request: Request, payload: CorrelationRequest):
     }
 
 def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others", group_col: Optional[str] = None) -> pd.DataFrame:
-    col = group_col if group_col else x_col
-    if col not in df.columns:
+    if x_col not in df.columns:
         return df
 
-    values = df[col].values
+    values = df[x_col].values
     if len(values) < 5:
         return df
 
@@ -111,7 +110,11 @@ def _histogram_elbow_grouping(df: pd.DataFrame, x_col: str, label: str = "others
 
     threshold = 10 ** bin_edges[elbow_idx + 1]
 
-    mask = df[col] < threshold
+    if group_col == 'y':
+        mask = df[x_col] > threshold
+    else:
+        mask = df[x_col] < threshold
+
     if mask.sum() < 2:
         return df
 
@@ -153,9 +156,9 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
-    # group_column determines which column to histogram on:
-    #   "y"      -> histogram on KPI output (y), group low-y tail (underperformers)
-    #   "x"/None -> histogram on independent var (x), group low-x tail (low-volume noise)
+    # Always histograms on x_col. When group_col='y' (x is a reverse metric,
+    # e.g. position where lower = better), inverts to group the SPARSE
+    # high-x tail (poor performers) instead of the DENSE low-x tail.
     if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
         x_col = ind_vars[0]
         group_col = ech.group_column if ech.group_column and ech.group_column != "x" else None
