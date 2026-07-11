@@ -49,6 +49,7 @@ class CorrelationRequest(BaseModel):
 class EdgeCaseHandling(BaseModel):
     weighted: bool = True
     grouping: str = "none"  # "none", "histogram", "percentile"
+    group_column: Optional[str] = None  # "y" when position is the independent variable
 
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
@@ -192,8 +193,11 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         baseline_intercept = float(model.intercept_)
 
     # --- Step 2: Histogram-elbow filter (chart readability only) ---
+    # Skip for position metrics — the elbow removes LOW x values, but for
+    # position lower = better (position 1 is top of page), so it would
+    # incorrectly remove top-ranked keywords. PHP handles position filtering.
     df_display = df.copy()
-    if ech and ech.grouping == "histogram" and len(ind_vars) == 1:
+    if ech and ech.grouping == "histogram" and len(ind_vars) == 1 and ech.group_column != "y":
         x_col = ind_vars[0]
         filtered = _histogram_elbow_filter(df_display, x_col)
         if len(filtered) >= 2:
