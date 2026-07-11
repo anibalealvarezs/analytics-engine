@@ -158,22 +158,13 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         df_x = pd.DataFrame({"date": ts_data.dates, var_name: ts_data.values})
         dfs.append(df_x)
         
-    # Log raw time series unknown entries before merge
-    dep_unknown_count = sum(1 for d in payload.dependent_var.dates if d == "unknown")
-    ind_unknown_counts = {}
-    for var_name, ts_data in payload.independent_vars.items():
-        ind_unknown_counts[var_name] = sum(1 for d in ts_data.dates if d == "unknown")
-    total_ind_dates = {k: len(v.dates) for k, v in payload.independent_vars.items()}
-    logger.info(f"raw_unknown_series: dep_unknown={dep_unknown_count}, ind_unknown={ind_unknown_counts}, total_dep_dates={len(payload.dependent_var.dates)}, total_ind_dates={total_ind_dates}")
-    
     from functools import reduce
     df = reduce(lambda left, right: pd.merge(left, right, on="date", how="inner"), dfs).dropna()
     
     unknown_rows = df[df["date"] == "unknown"]
     if len(unknown_rows) > 0:
-        ivar_cols = list(payload.independent_vars.keys())
-        icol = ivar_cols[0] if ivar_cols else None
-        logger.info(f"merge_unknown_check: n_unknown_rows={len(unknown_rows)}, y_vals={unknown_rows['y'].tolist()}, x_vals={unknown_rows[icol].tolist() if icol else 'no_ivar'}")
+        x_cols = [c for c in df.columns if c != "date"]
+        logger.info(f"merge_unknown_check: n_unknown_rows={len(unknown_rows)}, x_values={unknown_rows[x_cols[0]].tolist() if x_cols else 'none'}")
     else:
         logger.info("merge_unknown_check: no unknown rows in merged df")
     
@@ -204,9 +195,8 @@ def calculate_regression(request: Request, payload: RegressionRequest):
 
     unknown_rows_after = df[df["date"] == "unknown"]
     if len(unknown_rows_after) > 0:
-        ivar_cols = list(payload.independent_vars.keys())
-        icol = ivar_cols[0] if ivar_cols else None
-        logger.info(f"merge_unknown_after_histogram: n_unknown_rows={len(unknown_rows_after)}, y_vals={unknown_rows_after['y'].tolist()}, x_vals={unknown_rows_after[icol].tolist() if icol else 'no_ivar'}")
+        x_cols = [c for c in df.columns if c != "date"]
+        logger.info(f"merge_unknown_after_histogram: n_unknown_rows={len(unknown_rows_after)}, x_values={unknown_rows_after[x_cols[0]].tolist() if x_cols else 'none'}")
     else:
         logger.info("merge_unknown_after_histogram: no unknown rows")
 
