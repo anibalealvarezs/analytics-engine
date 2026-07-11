@@ -161,6 +161,13 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     from functools import reduce
     df = reduce(lambda left, right: pd.merge(left, right, on="date", how="inner"), dfs).dropna()
     
+    unknown_rows = df[df["date"] == "unknown"]
+    if len(unknown_rows) > 0:
+        x_cols = [c for c in df.columns if c != "date"]
+        logger.info(f"merge_unknown_check: n_unknown_rows={len(unknown_rows)}, x_values={unknown_rows[x_cols[0]].tolist() if x_cols else 'none'}")
+    else:
+        logger.info("merge_unknown_check: no unknown rows in merged df")
+    
     if len(df) < 2:
         raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
         
@@ -185,6 +192,13 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         df = _histogram_elbow_grouping(df, x_col)
         if len(df) < 2:
             raise HTTPException(status_code=400, detail="Not enough data points after histogram grouping.")
+
+    unknown_rows_after = df[df["date"] == "unknown"]
+    if len(unknown_rows_after) > 0:
+        x_cols = [c for c in df.columns if c != "date"]
+        logger.info(f"merge_unknown_after_histogram: n_unknown_rows={len(unknown_rows_after)}, x_values={unknown_rows_after[x_cols[0]].tolist() if x_cols else 'none'}")
+    else:
+        logger.info("merge_unknown_after_histogram: no unknown rows")
 
     X = df[ind_vars]
     y = df["y"]
