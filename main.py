@@ -165,6 +165,7 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
         
     ind_vars = list(payload.independent_vars.keys())
+    ech = payload.edge_case_handling
 
     # Log incoming data before any processing
     if len(ind_vars) == 1:
@@ -175,7 +176,6 @@ def calculate_regression(request: Request, payload: RegressionRequest):
         logger.info(f"analytics_engine_incoming: n={len(df)}, min_x={float(np.min(x_vals)):.4f}, max_x={float(np.max(x_vals)):.4f}, max_x_label={labels[max_idx]}, grouping={ech.grouping if ech else 'none'}, weighted={ech.weighted if ech else 'none'}")
     else:
         logger.info(f"analytics_engine_incoming: n={len(df)}, vars={ind_vars}")
-    ech = payload.edge_case_handling
 
     # --- Step 1: Apply histogram-elbow grouping (chart readability) ---
     # Groups the low-x tail (noisy, low-volume items) into a single
