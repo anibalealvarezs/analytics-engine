@@ -50,6 +50,7 @@ class EdgeCaseHandling(BaseModel):
     weighted: bool = True
     grouping: str = "none"  # "none", "histogram", "percentile"
     group_column: Optional[str] = None  # "y" when position is the independent variable
+    remove_unknown: bool = False
 
 class RegressionRequest(BaseModel):
     independent_vars: Dict[str, TimeSeriesData]
@@ -155,11 +156,18 @@ def calculate_regression(request: Request, payload: RegressionRequest):
     else:
         logger.info("merge_unknown_check: no unknown rows in merged df")
     
-    if len(df) < 2:
-        raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
-        
     ind_vars = list(payload.independent_vars.keys())
     ech = payload.edge_case_handling
+    
+    if ech and ech.remove_unknown:
+        unknown_mask = df["date"] == "unknown"
+        n_unknown = unknown_mask.sum()
+        if n_unknown > 0:
+            df = df[~unknown_mask]
+            logger.info(f"remove_unknown: removed {n_unknown} unknown row(s), remaining={len(df)}")
+    
+    if len(df) < 2:
+        raise HTTPException(status_code=400, detail="Not enough overlapping data points for regression.")
 
     # Log incoming data before any processing
     if len(ind_vars) == 1:
