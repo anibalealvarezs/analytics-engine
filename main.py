@@ -245,25 +245,65 @@ def calculate_regression(request: Request, payload: RegressionRequest):
 @limiter.limit("500/minute")
 def calculate_autocorrelation(request: Request, payload: RegressionRequest, lags: int = 7):
     """
-    Calculates the autocorrelation of the dependent variable.
-    Great for proving weekly seasonality (lag=7).
+    Calculates the autocorrelation of the dependent variable across multiple lags (1..max_lags)
+    as well as decay dynamics (half-life, weekly seasonality).
     """
     df = pd.DataFrame({"date": payload.dependent_var.dates, "y": payload.dependent_var.values})
     df['date'] = pd.to_datetime(df['date'])
-    df = df.set_index('date').dropna()
+    df = df.sort_values('date').set_index('date').dropna()
     
     series = df['y']
-    if len(series) <= lags:
-        raise HTTPException(status_code=400, detail=f"Series length ({len(series)}) must be greater than lags ({lags}).")
+    n_points = len(series)
+    if n_points <= 2:
+        raise HTTPException(status_code=400, detail=f"Series length ({n_points}) must be at least 3 data points.")
         
-    acf_value = series.autocorr(lag=lags)
+    # Determine maximum lags (up to 14 days or n_points // 2)
+    max_lags = min(14, max(lags, n_points - 2))
     
+    correlogram = []
+    lags_list = []
+    acf_values = []
+    
+    # 95% Bartlett confidence band for white noise: +/- 1.96 / sqrt(N)
+    ci_bound = float(1.96 / np.sqrt(n_points)) if n_points > 0 else 0.0
+    
+    half_life_days = None
+    for k in range(1, max_lags + 1):
+        if n_points > k:
+            val = series.autocorr(lag=k)
+            val = float(val) if not np.isnan(val) else 0.0
+        else:
+            val = 0.0
+            
+        lags_list.append(k)
+        acf_values.append(val)
+        correlogram.append({
+            "lag": k,
+            "label": f"Lag {k}d",
+            "autocorrelation": val,
+            "significant": bool(abs(val) > ci_bound)
+        })
+        
+        # Estimate empirical half-life: first lag where autocorrelation drops below 0.5
+        if half_life_days is None and val < 0.5 and k > 1:
+            half_life_days = k
+
+    # Backward compatibility target lag (default 7)
+    target_lag_idx = lags - 1 if (0 < lags <= len(acf_values)) else (len(acf_values) - 1)
+    target_acf = acf_values[target_lag_idx] if acf_values else 0.0
+
     return {
         "success": True,
         "data": {
-            "autocorrelation": float(acf_value) if not np.isnan(acf_value) else None,
+            "autocorrelation": target_acf,
             "lag_days": lags,
-            "data_points": len(series)
+            "data_points": n_points,
+            "lags": lags_list,
+            "acf_values": acf_values,
+            "correlogram": correlogram,
+            "confidence_band": ci_bound,
+            "half_life_days": half_life_days,
+            "seasonality_7d": acf_values[6] if len(acf_values) >= 7 else None
         }
     }
 
